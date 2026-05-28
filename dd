@@ -1,0 +1,10 @@
+const express = require('express');
+const { ExpressPeerServer } = require('peer');
+const app = express();
+
+// TENTO RIADOK TI CHÝBA – hovorí serveru, aby ukázal hru:
+app.use(express.static('public')); 
+
+const server = app.listen(process.env.PORT || 3000);
+const peerServer = ExpressPeerServer(server, { path: '/' });
+app.use('/', peerServer);
