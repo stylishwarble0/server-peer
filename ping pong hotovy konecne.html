@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Ping Pong - ONLINE PONG (Ultra-Fast WebRTC)</title>
+    <style>
+        * { box-sizing: border-box; user-select: none; -webkit-user-select: none; touch-action: none; }
+        body {
+            background-color: #060913; margin: 0; padding: 0; overflow: hidden;
+            font-family: sans-serif; display: flex; justify-content: center; align-items: center;
+            height: 100vh; width: 100vw;
+        }
+        .game-wrapper {
+            width: 96%; max-width: 700px; height: 60vh;
+            background: #0c0f1d; border: 2px solid #222949; border-radius: 14px;
+            position: relative; box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+        }
+        .game-container { position: relative; width: 100%; height: 100%; overflow: hidden; border-radius: 12px; }
+        canvas { display: block; width: 100%; height: 100%; background: radial-gradient(circle, #1a102f 0%, #060913 100%); }
+
+        #connection-panel {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(12,15,29,0.96); border: 2px solid #ff69b4; border-radius: 10px;
+            padding: 20px; text-align: center; width: 88%; max-width: 360px; color: white; z-index: 20;
+        }
+        #connection-panel h2 { color: #ff69b4; margin: 0 0 8px 0; font-size: 17px; }
+        #connection-panel p { margin: 4px 0; font-size: 12px; color: #ccc; }
+        #room-input { width: 100%; padding: 10px; margin: 12px 0; border-radius: 6px; border: 1px solid #222949; background: #060913; color: #fff; text-align: center; font-size: 18px; letter-spacing: 4px; font-weight: bold; }
+        .btn-group { display: flex; gap: 8px; }
+        .btn { flex: 1; padding: 12px 6px; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 11px; border: none; }
+        #host-btn { background: #ff69b4; color: white; }
+        #join-btn { background: transparent; border: 2px solid #ff69b4; color: white; }
+
+        #ui { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; color: #fff; font-size: 14px; font-weight: bold; pointer-events: none; font-family: monospace; z-index: 5; }
+        #p1-stats, #p2-stats { color: #ff69b4; }
+
+        #countdown-text { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #ff69b4; font-size: 45px; font-weight: bold; font-family: monospace; z-index: 15; text-shadow: 0 0 20px rgba(255,105,180,0.8); pointer-events: none; text-align: center; width: 90%; }
+        #game-over { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(6,9,19,0.95); border: 2px solid #ff69b4; border-radius: 8px; padding: 15px; text-align: center; width: 80%; max-width: 300px; color: white; z-index: 10; }
+        #restart-btn { background: #ff69b4; color: #060913; border: none; padding: 10px 20px; font-size: 13px; font-weight: bold; border-radius: 20px; margin-top: 10px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<div class="game-wrapper">
+  <div class="game-container">
+    <div id="connection-panel">
+      <h2>ZADAJTE ROVNAKÝ KÓD</h2>
+      <p>Vymyslite si random 4 čísla:</p>
+      <input type="number" id="room-input" placeholder="Napr. 6583" oninput="if(this.value.length > 4) this.value = this.value.slice(0,5);">
+      <div class="btn-group">
+         <button id="host-btn" class="btn">PRIPOJIŤ SA (Vľavo)</button>
+         <button id="join-btn" class="btn">PRIPOJIŤ SA (Vpravo)</button>
+      </div>
+      <p id="status-text" style="color: #ff69b4; margin-top: 10px; font-size: 12px;">Pripájanie k PeerJS sieti...</p>
+    </div>
+
+    <div id="ui" style="display: none;">
+      <div id="p1-stats">HRÁČ 1(Vľavo): 0</div>
+      <div id="p2-stats">HRÁČ 2 (Vpravo): 0</div>
+    </div>
+
+    <div id="countdown-text">ČAKÁ SA NA VYZYVATEĽA...</div>
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="game-over">
+      <h2 id="game-over-title">KONIEC HRY</h2>
+      <p id="game-over-text"></p>
+      <button id="restart-btn" onclick="location.reload()">HRAŤ ZNOVU</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const connectionPanel = document.getElementById("connection-panel");
+const roomInput = document.getElementById("room-input");
+const hostBtn = document.getElementById("host-btn");
+const joinBtn = document.getElementById("join-btn");
+const statusText = document.getElementById("status-text");
+const ui = document.getElementById("ui");
+const p1Stats = document.getElementById("p1-stats");
+const p2Stats = document.getElementById("p2-stats");
+const gameOverScreen = document.getElementById("game-over");
+const gameOverTitle = document.getElementById("game-over-title");
+const countdownText = document.getElementById("countdown-text");
+
+canvas.width = 700;
+canvas.height = 400;
+
+// Pre-render emoji vírusu
+const virusSize = 24;
+const virusCanvas = document.createElement('canvas');
+virusCanvas.width = virusSize; virusCanvas.height = virusSize;
+const virusCtx = virusCanvas.getContext('2d');
+virusCtx.font = `${virusSize - 2}px Arial`;
+virusCtx.textAlign = 'center'; virusCtx.textBaseline = 'middle';
+virusCtx.fillText('🦠', virusSize / 2, virusSize / 2);
+
+let myRole = "";
+let gameStarted = false;
+let peer = null;
+let conn = null; // WebRTC dátové spojenie
+let ballMoving = false;
+
+let player1 = { x: 20,  y: 160, width: 18, height: 80, score: 0 };
+let player2 = { x: 662, y: 160, width: 18, height: 80, score: 0 };
+let ball = { x: 350, y: 200, radius: 10, dx: 0, dy: 0 };
+
+const BASE_DX = 5;
+const BASE_DY = 3.5;
+
+// Inicializácia PeerJS
+function initPeerSystem(role) {
+    const code = roomInput.value.trim();
+    if (code.length !== 4) { alert("Kód musí mať presne 4 čísiel!"); return; }
+    
+    myRole = role;
+    hostBtn.disabled = true;
+    joinBtn.disabled = true;
+    
+    // Prefix zabezpečí, že sa nespojíte s niekým cudzím na svete
+    const peerRoomId = `ping-pong-pong-room-${code}`;
+
+    if (myRole === "host") {
+        statusText.innerText = "Zakladám izbu, čakám na príchod klienta...";
+        peer = new Peer(peerRoomId);
+
+        peer.on('open', (id) => {
+            statusText.innerText = "Izba pripravená! Druhý hráč sa môže pripojiť.";
+        });
+
+        peer.on('connection', (connection) => {
+            conn = connection;
+            setupDataChannel();
+        });
+
+        peer.on('error', (err) => {
+            if (err.type === 'unavailable-id') {
+                alert("Tento kód už niekto založil. Zadaj iné čísla.");
+            } else {
+                statusText.innerText = "Chyba: " + err.type;
+            }
+            resetButtons();
+        });
+    } else {
+        statusText.innerText = "Pripájam sa k hostiteľovi napriamo...";
+        peer = new Peer(); // Klient dostane náhodné ID
+
+        peer.on('open', () => {
+            conn = peer.connect(peerRoomId, { reliable: false }); // false aktivuje rýchlejší UDP-like režim pre hry
+            setupDataChannel();
+        });
+
+        peer.on('error', (err) => {
+            statusText.innerText = "Hostiteľ nenašiel izbu. Skontroluj kód.";
+            resetButtons();
+        });
+    }
+}
+
+function resetButtons() {
+    hostBtn.disabled = false;
+    joinBtn.disabled = false;
+}
+
+// Nastavenie prijímania správ cez napriamy WebRTC tunel
+function setupDataChannel() {
+    conn.on('open', () => {
+        connectionPanel.style.display = "none";
+        ui.style.display = "flex";
+        runCountdown();
+    });
+
+    conn.on('data', (data) => {
+        if (myRole === "client") {
+            // Klient prijíma absolútnu pozíciu lopty a pálky hostiteľa v reálnom čase (60fps)
+            ball.x = data.bx;
+            ball.y = data.by;
+            player1.y = data.p1y;
+            player1.score = data.s1;
+            player2.score = data.s2;
+            updateUI();
+            
+            if (data.gameOver) {
+                endGame();
+            }
+        } else {
+            // Hostiteľ prijíma len pozíciu pálky klienta
+            player2.y = data.p2y;
+        }
+    });
+
+    conn.on('close', () => {
+        alert("Súper sa odpojil.");
+        location.reload();
+    });
+}
+
+hostBtn.addEventListener('click', () => initPeerSystem("host"));
+joinBtn.addEventListener('click', () => initPeerSystem("client"));
+
+function runCountdown() {
+    countdownText.style.display = "block";
+    let n = 3;
+    countdownText.innerText = n;
+    let interval = setInterval(() => {
+        n--;
+        if (n > 0) { countdownText.innerText = n; }
+        else if (n === 0) { countdownText.innerText = "ŠTART!"; }
+        else {
+            clearInterval(interval);
+            countdownText.style.display = "none";
+            gameStarted = true;
+            if (myRole === "host") launchBall();
+            requestAnimationFrame(gameLoop);
+        }
+    }, 1000);
+}
+
+function launchBall() {
+    ball.x = canvas.width / 2; ball.y = canvas.height / 2;
+    ball.dx = Math.random() > 0.5 ? BASE_DX : -BASE_DX;
+    ball.dy = (Math.random() * 2 - 1) * BASE_DY;
+    ballMoving = true;
+}
+
+// ── Sledovanie dotykov / myši ──
+let pointerClientY = null;
+canvas.addEventListener("mousemove", (e) => { pointerClientY = e.clientY; });
+canvas.addEventListener("touchmove", (e) => {
+    if (e.touches.length > 0) pointerClientY = e.touches[0].clientY;
+    e.preventDefault();
+}, { passive: false });
+
+function applyPointerInput() {
+    if (pointerClientY === null || !gameStarted) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleY = canvas.height / rect.height;
+    let newY = Math.round((pointerClientY - rect.top) * scaleY - player1.height / 2);
+    newY = Math.max(0, Math.min(canvas.height - player1.height, newY));
+    
+    if (myRole === "host") player1.y = newY;
+    else player2.y = newY;
+}
+
+function updateUI() {
+    p1Stats.innerText = "HRÁČ 1 (Vľavo): " + player1.score;
+    p2Stats.innerText = "HRÁČ 2 (Vpravo): " + player2.score;
+}
+
+// ── Fyzika hry (Počíta ju výhradne Hostiteľ a posiela ju klientovi) ──
+function updatePhysics(dt) {
+    applyPointerInput();
+    if (!gameStarted) return;
+
+    if (myRole === "host") {
+        if (!ballMoving) return;
+
+        ball.x += ball.dx * dt;
+        ball.y += ball.dy * dt;
+
+        // Odrazy od stien
+        if (ball.y - ball.radius < 0) { ball.y = ball.radius; ball.dy = Math.abs(ball.dy); }
+        if (ball.y + ball.radius > canvas.height) { ball.y = canvas.height - ball.radius; ball.dy = -Math.abs(ball.dy); }
+
+        // Kolízia s ľavou pálkou
+        if (ball.dx < 0 &&
+            ball.x - ball.radius < player1.x + player1.width &&
+            ball.x - ball.radius > player1.x &&
+            ball.y > player1.y && ball.y < player1.y + player1.height) {
+            ball.dx = Math.abs(ball.dx) * 1.05;
+            ball.x = player1.x + player1.width + ball.radius;
+        }
+
+        // Kolízia s pravou pálkou
+        if (ball.dx > 0 &&
+            ball.x + ball.radius > player2.x &&
+            ball.x + ball.radius < player2.x + player2.width &&
+            ball.y > player2.y && ball.y < player2.y + player2.height) {
+            ball.dx = -Math.abs(ball.dx) * 1.05;
+            ball.x = player2.x - ball.radius;
+        }
+
+        // Góly
+        if (ball.x < 0) { player2.score++; handleGoal(); }
+        else if (ball.x > canvas.width) { player1.score++; handleGoal(); }
+    }
+}
+
+function handleGoal() {
+    ballMoving = false;
+    ball.x = canvas.width / 2; ball.y = canvas.height / 2;
+    ball.dx = 0; ball.dy = 0;
+    updateUI();
+
+    if (player1.score >= 5 || player2.score >= 5) {
+        endGame();
+    } else {
+        setTimeout(launchBall, 1000);
+    }
+}
+
+function endGame() {
+    gameStarted = false;
+    gameOverScreen.style.display = "block";
+    gameOverTitle.innerText = (player1.score >= 5) ? "VYHRAL HRÁČ 1! 💊" : "VYHRAL HRÁČ 2! 💊";
+}
+
+// ── Vykresľovanie pálok a vírusu ──
+function drawPill(x, y, w, h) {
+    ctx.fillStyle = "#ff69b4";
+    ctx.beginPath();
+    if (ctx.roundRect) {
+        ctx.roundRect(x, y, w, h, w / 2);
+    } else {
+        const r = w / 2;
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+    }
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.4)";
+    ctx.fillRect(x, y + h / 2 - 1, w, 2);
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.1)";
+    ctx.setLineDash([10, 10]);
+    ctx.beginPath();
+    ctx.moveTo(canvas.width / 2, 0); ctx.lineTo(canvas.width / 2, canvas.height);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    drawPill(player1.x, player1.y, player1.width, player1.height);
+    drawPill(player2.x, player2.y, player2.width, player2.height);
+    ctx.drawImage(virusCanvas, ball.x - virusSize / 2, ball.y - virusSize / 2, virusSize, virusSize);
+}
+
+// ── Hlavná herná slučka ──
+let lastTime = 0;
+
+function gameLoop(currentTime) {
+    if (!gameStarted) return;
+    if (!lastTime) lastTime = currentTime;
+    let frameTime = Math.min(currentTime - lastTime, 100);
+    lastTime = currentTime;
+    const dt = frameTime / (1000 / 60);
+
+    updatePhysics(dt);
+
+    // BLESKOVÁ SYNCHRONIZÁCIA CEZ WEBRTC KANÁL (každý frame)
+    if (conn && conn.open) {
+        if (myRole === "host") {
+            conn.send({
+                bx: Math.round(ball.x),
+                by: Math.round(ball.y),
+                p1y: Math.round(player1.y),
+                s1: player1.score,
+                s2: player2.score,
+                gameOver: !gameStarted && (player1.score >= 5 || player2.score >= 5)
+            });
+        } else {
+            conn.send({ p2y: Math.round(player2.y) });
+        }
+    }
+
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+</script>
+</body>
+</html>ň
